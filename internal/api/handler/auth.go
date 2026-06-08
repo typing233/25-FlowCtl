@@ -16,14 +16,16 @@ import (
 type AuthHandler struct {
 	authService  *auth.Service
 	oidcProvider *auth.OIDCProvider
+	samlProvider *auth.SAMLProvider
 	pool         *pgxpool.Pool
 }
 
 // NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(authService *auth.Service, oidcProvider *auth.OIDCProvider, pool *pgxpool.Pool) *AuthHandler {
+func NewAuthHandler(authService *auth.Service, oidcProvider *auth.OIDCProvider, samlProvider *auth.SAMLProvider, pool *pgxpool.Pool) *AuthHandler {
 	return &AuthHandler{
 		authService:  authService,
 		oidcProvider: oidcProvider,
+		samlProvider: samlProvider,
 		pool:         pool,
 	}
 }
@@ -104,7 +106,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			`INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, now(), now())`,
 			tenantID, oidcUser.Name+"'s Workspace", userID.String())
 		_, _ = h.pool.Exec(r.Context(),
-			`INSERT INTO tenant_memberships (user_id, tenant_id, role, joined_at) VALUES ($1, $2, 'owner', now())`,
+			`INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at) VALUES ($1, $2, 'owner', now())`,
 			userID, tenantID)
 		role = "owner"
 	}
@@ -165,6 +167,11 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 // SAMLACS handles SAML assertion consumer service callbacks.
 func (h *AuthHandler) SAMLACS(w http.ResponseWriter, r *http.Request) {
+	if h.samlProvider == nil {
+		respondError(w, http.StatusNotImplemented, "SAML is not configured")
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		respondError(w, http.StatusBadRequest, "failed to parse form")
 		return
@@ -176,10 +183,41 @@ func (h *AuthHandler) SAMLACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In a full implementation this would validate the SAML assertion using
-	// the crewjam/saml library. For now we indicate that SAML processing
-	// requires service provider configuration at startup.
-	respondError(w, http.StatusNotImplemented, "SAML ACS processing requires service provider configuration")
+	samlUser, err := h.samlProvider.ExtractUser(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "failed to extract SAML user: "+err.Error())
+		return
+	}
+
+	userID, err := h.samlProvider.UpsertUser(r.Context(), samlUser)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to upsert user: "+err.Error())
+		return
+	}
+
+	var tenantID uuid.UUID
+	var role string
+	err = h.pool.QueryRow(r.Context(),
+		`SELECT tenant_id, role FROM tenant_memberships WHERE user_id = $1 LIMIT 1`,
+		userID).Scan(&tenantID, &role)
+	if err != nil {
+		tenantID = uuid.New()
+		_, _ = h.pool.Exec(r.Context(),
+			`INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, now(), now())`,
+			tenantID, samlUser.Name+"'s Workspace", userID.String())
+		_, _ = h.pool.Exec(r.Context(),
+			`INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at) VALUES ($1, $2, 'owner', now())`,
+			userID, tenantID)
+		role = "owner"
+	}
+
+	tokenPair, err := h.authService.GenerateTokenPair(userID, samlUser.Email, tenantID, role)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to generate tokens")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, tokenPair)
 }
 
 // Me returns the current user's information.

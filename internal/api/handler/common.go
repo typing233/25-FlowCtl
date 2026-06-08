@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flowctl/flowctl/internal/api/middleware"
+	"github.com/flowctl/flowctl/internal/secrets"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -87,8 +88,8 @@ func ListSecrets(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// CreateSecret returns an http.HandlerFunc that creates a new secret.
-func CreateSecret(pool *pgxpool.Pool) http.HandlerFunc {
+// CreateSecret returns an http.HandlerFunc that creates a new secret using the Vault for encryption.
+func CreateSecret(vault *secrets.Vault) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := middleware.GetTenantID(r.Context())
 
@@ -107,18 +108,12 @@ func CreateSecret(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		id := uuid.New()
-		_, err := pool.Exec(r.Context(),
-			`INSERT INTO secrets (id, tenant_id, name, encrypted_value, scope, scope_id, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, now())`,
-			id, tenantID, req.Name, []byte(req.Value), req.Scope, req.ScopeID)
-		if err != nil {
+		if err := vault.Set(r.Context(), tenantID, req.Name, req.Value, req.Scope, req.ScopeID); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to create secret")
 			return
 		}
 
 		respondJSON(w, http.StatusCreated, map[string]any{
-			"id":   id,
 			"name": req.Name,
 		})
 	}

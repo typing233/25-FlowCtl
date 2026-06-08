@@ -5,23 +5,26 @@
 -- ============================================================================
 
 CREATE TYPE execution_status AS ENUM (
+    'pending',
     'queued',
     'running',
+    'waiting_approval',
     'paused',
-    'completed',
+    'succeeded',
     'failed',
     'cancelled',
-    'timed_out'
+    'retrying'
 );
 
 CREATE TYPE step_status AS ENUM (
     'pending',
+    'queued',
     'running',
-    'completed',
+    'waiting_approval',
+    'succeeded',
     'failed',
     'skipped',
     'cancelled',
-    'waiting_approval',
     'retrying'
 );
 
@@ -61,10 +64,12 @@ CREATE TABLE tenant_memberships (
 
 -- 4. Roles
 CREATE TABLE roles (
-    id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    name      TEXT NOT NULL,
-    level     TEXT NOT NULL CHECK (level IN ('system', 'tenant', 'workflow', 'node', 'operation')),
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    level       TEXT NOT NULL DEFAULT 'tenant' CHECK (level IN ('system', 'tenant', 'workflow', 'node', 'operation')),
+    permissions TEXT[] NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, name)
 );
 
@@ -235,6 +240,12 @@ CREATE TABLE scheduler_nodes (
     heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     metadata     JSONB
+);
+
+-- 17. Auth States (OIDC/SAML CSRF protection)
+CREATE TABLE auth_states (
+    state      TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================================

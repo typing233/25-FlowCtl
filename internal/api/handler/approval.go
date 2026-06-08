@@ -101,9 +101,12 @@ func (h *ApprovalHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fire pg_notify to unblock the execution
+	// Fire pg_notify to unblock the execution - channel must match scheduler's LISTEN
+	var executionID uuid.UUID
+	_ = h.pool.QueryRow(r.Context(),
+		`SELECT execution_id FROM approvals WHERE id = $1`, approvalID).Scan(&executionID)
 	_, _ = h.pool.Exec(r.Context(),
-		`SELECT pg_notify('approval_resolved', $1::text)`, approvalID.String())
+		`SELECT pg_notify('approval_responded', $1::text)`, executionID.String())
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 }
@@ -137,9 +140,12 @@ func (h *ApprovalHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fire pg_notify to unblock the execution
+	// Fire pg_notify to unblock the execution - channel must match scheduler's LISTEN
+	var executionID uuid.UUID
+	_ = h.pool.QueryRow(r.Context(),
+		`SELECT execution_id FROM approvals WHERE id = $1`, approvalID).Scan(&executionID)
 	_, _ = h.pool.Exec(r.Context(),
-		`SELECT pg_notify('approval_resolved', $1::text)`, approvalID.String())
+		`SELECT pg_notify('approval_responded', $1::text)`, executionID.String())
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
 }

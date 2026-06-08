@@ -17,6 +17,7 @@ import (
 	"github.com/flowctl/flowctl/internal/config"
 	"github.com/flowctl/flowctl/internal/engine"
 	"github.com/flowctl/flowctl/internal/runner"
+	"github.com/flowctl/flowctl/internal/secrets"
 )
 
 func main() {
@@ -70,11 +71,33 @@ func main() {
 		}
 	}
 
+	var samlProvider *auth.SAMLProvider
+	if cfg.Auth.SAMLCertPath != "" && cfg.Auth.SAMLKeyPath != "" {
+		samlProvider, err = auth.NewSAMLProvider(auth.SAMLConfig{
+			CertPath:    cfg.Auth.SAMLCertPath,
+			KeyPath:     cfg.Auth.SAMLKeyPath,
+			EntityID:    cfg.Auth.SAMLEntityID,
+			MetadataURL: cfg.Auth.SAMLMetadataURL,
+			ACSURL:      fmt.Sprintf("http://localhost:%d/auth/saml/acs", cfg.Server.Port),
+		}, pool)
+		if err != nil {
+			logger.Warn("SAML provider not configured", "error", err)
+		}
+	}
+
+	vault, err := secrets.NewVault(pool, cfg.Encryption.MasterKey)
+	if err != nil {
+		logger.Error("failed to initialize secrets vault", "error", err)
+		os.Exit(1)
+	}
+
 	deps := &api.Dependencies{
 		Pool:         pool,
 		AuthService:  authService,
 		RBACEngine:   rbacEngine,
 		OIDCProvider: oidcProvider,
+		SAMLProvider: samlProvider,
+		Vault:        vault,
 	}
 
 	router := api.NewRouter(deps)

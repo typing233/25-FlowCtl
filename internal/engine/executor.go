@@ -231,6 +231,13 @@ func (e *Executor) handleApproval(ctx context.Context, exec *model.Execution, ap
 
 	e.transitionExecution(ctx, exec, model.ExecutionStatusWaitingApproval)
 
+	// Subscribe to pg_notify for this execution to get faster wakeup
+	listenConn, err := e.pool.Acquire(ctx)
+	if err == nil {
+		listenConn.Exec(ctx, "LISTEN approval_responded")
+		defer listenConn.Release()
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -239,20 +246,33 @@ func (e *Executor) handleApproval(ctx context.Context, exec *model.Execution, ap
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-ticker.C:
-			var status string
-			err := e.pool.QueryRow(ctx,
-				"SELECT status FROM approvals WHERE id = $1", approvalID).Scan(&status)
-			if err != nil {
+			approved, resolved := e.checkApprovalStatus(ctx, approvalID)
+			if !resolved {
 				continue
 			}
-			if status == "approved" {
+			if approved {
 				e.transitionExecution(ctx, exec, model.ExecutionStatusRunning)
 				return true, nil
 			}
-			if status == "rejected" {
-				return false, nil
-			}
+			return false, nil
 		}
+	}
+}
+
+func (e *Executor) checkApprovalStatus(ctx context.Context, approvalID uuid.UUID) (approved bool, resolved bool) {
+	var status string
+	err := e.pool.QueryRow(ctx,
+		"SELECT status FROM approvals WHERE id = $1", approvalID).Scan(&status)
+	if err != nil {
+		return false, false
+	}
+	switch status {
+	case "approved":
+		return true, true
+	case "rejected":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

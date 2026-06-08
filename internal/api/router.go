@@ -12,6 +12,7 @@ import (
 	"github.com/flowctl/flowctl/internal/api/middleware"
 	"github.com/flowctl/flowctl/internal/api/websocket"
 	"github.com/flowctl/flowctl/internal/auth"
+	"github.com/flowctl/flowctl/internal/secrets"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,6 +21,8 @@ type Dependencies struct {
 	AuthService  *auth.Service
 	RBACEngine   *auth.RBACEngine
 	OIDCProvider *auth.OIDCProvider
+	SAMLProvider *auth.SAMLProvider
+	Vault        *secrets.Vault
 }
 
 func NewRouter(deps *Dependencies) chi.Router {
@@ -42,7 +45,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 	tenantMW := middleware.NewTenantMiddleware(deps.Pool)
 	rbacMW := middleware.NewRBACMiddleware(deps.RBACEngine)
 
-	authHandler := handler.NewAuthHandler(deps.AuthService, deps.OIDCProvider, deps.Pool)
+	authHandler := handler.NewAuthHandler(deps.AuthService, deps.OIDCProvider, deps.SAMLProvider, deps.Pool)
 	workflowHandler := handler.NewWorkflowHandler(deps.Pool)
 	executionHandler := handler.NewExecutionHandler(deps.Pool)
 	approvalHandler := handler.NewApprovalHandler(deps.Pool)
@@ -117,7 +120,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 		// Secrets
 		r.Route("/api/v1/secrets", func(r chi.Router) {
 			r.With(rbacMW.Require("secret:*", "read")).Get("/", handler.ListSecrets(deps.Pool))
-			r.With(rbacMW.Require("secret:*", "create")).Post("/", handler.CreateSecret(deps.Pool))
+			r.With(rbacMW.Require("secret:*", "create")).Post("/", handler.CreateSecret(deps.Vault))
 			r.With(rbacMW.Require("secret:*", "delete")).Delete("/{secretID}", handler.DeleteSecret(deps.Pool))
 		})
 
