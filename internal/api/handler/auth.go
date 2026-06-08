@@ -183,9 +183,9 @@ func (h *AuthHandler) SAMLACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	samlUser, err := h.samlProvider.ExtractUser(r)
+	samlUser, err := h.samlProvider.HandleACS(r)
 	if err != nil {
-		respondError(w, http.StatusUnauthorized, "failed to extract SAML user: "+err.Error())
+		respondError(w, http.StatusUnauthorized, "SAML authentication failed: "+err.Error())
 		return
 	}
 

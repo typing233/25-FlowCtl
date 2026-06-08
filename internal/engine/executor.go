@@ -231,31 +231,51 @@ func (e *Executor) handleApproval(ctx context.Context, exec *model.Execution, ap
 
 	e.transitionExecution(ctx, exec, model.ExecutionStatusWaitingApproval)
 
-	// Subscribe to pg_notify for this execution to get faster wakeup
 	listenConn, err := e.pool.Acquire(ctx)
-	if err == nil {
-		listenConn.Exec(ctx, "LISTEN approval_responded")
-		defer listenConn.Release()
+	if err != nil {
+		return false, fmt.Errorf("acquire listen conn: %w", err)
+	}
+	defer listenConn.Release()
+
+	_, err = listenConn.Exec(ctx, "LISTEN approval_responded")
+	if err != nil {
+		return false, fmt.Errorf("listen: %w", err)
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	// Check immediately in case approval was already responded before we started listening
+	if approved, resolved := e.checkApprovalStatus(ctx, approvalID); resolved {
+		if approved {
+			e.transitionExecution(ctx, exec, model.ExecutionStatusRunning)
+			return true, nil
+		}
+		return false, nil
+	}
 
 	for {
-		select {
-		case <-ctx.Done():
+		// Wait for a notification with a timeout as fallback
+		waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+		notification, err := listenConn.Conn().WaitForNotification(waitCtx)
+		waitCancel()
+
+		if ctx.Err() != nil {
 			return false, ctx.Err()
-		case <-ticker.C:
-			approved, resolved := e.checkApprovalStatus(ctx, approvalID)
-			if !resolved {
-				continue
-			}
-			if approved {
-				e.transitionExecution(ctx, exec, model.ExecutionStatusRunning)
-				return true, nil
-			}
-			return false, nil
 		}
+
+		if err == nil && notification != nil {
+			// Parse payload to see if it's for our execution
+			e.logger.Debug("approval notification received", "payload", notification.Payload)
+		}
+
+		// Check regardless (notification might be for us, or timeout as fallback poll)
+		approved, resolved := e.checkApprovalStatus(ctx, approvalID)
+		if !resolved {
+			continue
+		}
+		if approved {
+			e.transitionExecution(ctx, exec, model.ExecutionStatusRunning)
+			return true, nil
+		}
+		return false, nil
 	}
 }
 
