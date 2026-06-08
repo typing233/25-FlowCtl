@@ -1,0 +1,49 @@
+workflow "deploy-service" {
+  version = "1.0"
+
+  input "environment" {
+    type = "string"
+    required = true
+    enum = ["staging", "production"]
+  }
+
+  input "image_tag" {
+    type = "string"
+    required = true
+  }
+
+  step "build" {
+    runner = "docker"
+    image = "golang:1.22"
+    command = "make build TAG=${inputs.image_tag}"
+    timeout = "10m"
+    retry {
+      max_attempts = 3
+      backoff = "exponential"
+    }
+  }
+
+  step "test" {
+    depends_on = ["build"]
+    runner = "docker"
+    image = "golang:1.22"
+    command = "make test"
+  }
+
+  approval "deploy-gate" {
+    depends_on = ["test"]
+    when = "${inputs.environment == 'production'}"
+    required_roles = ["deployer", "admin"]
+    message = "Approve deployment of ${inputs.image_tag} to ${inputs.environment}?"
+  }
+
+  step "deploy" {
+    depends_on = ["deploy-gate"]
+    runner = "ssh"
+    host = "${secrets.DEPLOY_HOST}"
+    command = "kubectl set image deployment/app app=${inputs.image_tag}"
+    compensation {
+      command = "kubectl rollout undo deployment/app"
+    }
+  }
+}

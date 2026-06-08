@@ -1,0 +1,939 @@
+openapi: "3.0.3"
+info:
+  title: FlowCtl API
+  description: Production-grade multi-tenant workflow platform
+  version: "1.0.0"
+  contact:
+    name: FlowCtl Team
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: auth
+    description: Authentication and authorization
+  - name: workflows
+    description: Workflow definition management
+  - name: executions
+    description: Workflow execution management
+  - name: approvals
+    description: Human approval management
+  - name: tenants
+    description: Tenant management
+  - name: secrets
+    description: Secret management
+  - name: cron
+    description: Cron schedule management
+  - name: audit
+    description: Audit logs
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login with credentials or initiate OIDC flow
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+                provider:
+                  type: string
+                  enum: [local, oidc, saml]
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "302":
+          description: Redirect to OIDC provider
+
+  /auth/callback:
+    get:
+      tags: [auth]
+      summary: OIDC callback
+      operationId: oidcCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Token pair returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh access token
+      operationId: refreshToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+
+  /api/v1/workflows:
+    get:
+      tags: [workflows]
+      summary: List workflows
+      operationId: listWorkflows
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/TenantHeader"
+      responses:
+        "200":
+          description: Workflow list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workflow"
+                  total:
+                    type: integer
+    post:
+      tags: [workflows]
+      summary: Create workflow
+      operationId: createWorkflow
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug:
+                  type: string
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Workflow created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+
+  /api/v1/workflows/{workflowID}:
+    get:
+      tags: [workflows]
+      summary: Get workflow
+      operationId: getWorkflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Workflow details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+    put:
+      tags: [workflows]
+      summary: Update workflow
+      operationId: updateWorkflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "200":
+          description: Workflow updated
+
+  /api/v1/workflows/{workflowID}/versions:
+    post:
+      tags: [workflows]
+      summary: Publish new version
+      operationId: publishWorkflowVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, format]
+              properties:
+                source:
+                  type: string
+                  description: YAML or HUML source
+                format:
+                  type: string
+                  enum: [yaml, huml]
+      responses:
+        "201":
+          description: Version published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowVersion"
+    get:
+      tags: [workflows]
+      summary: List versions
+      operationId: listWorkflowVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Version list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkflowVersion"
+
+  /api/v1/workflows/{workflowID}/rollback:
+    post:
+      tags: [workflows]
+      summary: Rollback to previous version
+      operationId: rollbackWorkflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version:
+                  type: integer
+      responses:
+        "200":
+          description: Rolled back successfully
+
+  /api/v1/workflows/{workflowID}/run:
+    post:
+      tags: [executions]
+      summary: Start workflow execution
+      operationId: startExecution
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  additionalProperties: true
+                idempotency_key:
+                  type: string
+      responses:
+        "201":
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+
+  /api/v1/executions:
+    get:
+      tags: [executions]
+      summary: List executions
+      operationId: listExecutions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, queued, running, waiting_approval, paused, succeeded, failed, cancelled]
+        - name: workflow_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Execution list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Execution"
+                  total:
+                    type: integer
+
+  /api/v1/executions/{executionID}:
+    get:
+      tags: [executions]
+      summary: Get execution details
+      operationId: getExecution
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Execution details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+
+  /api/v1/executions/{executionID}/cancel:
+    post:
+      tags: [executions]
+      summary: Cancel execution
+      operationId: cancelExecution
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Execution cancelled
+
+  /api/v1/executions/{executionID}/retry:
+    post:
+      tags: [executions]
+      summary: Retry failed execution
+      operationId: retryExecution
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "201":
+          description: New execution created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+
+  /api/v1/executions/{executionID}/logs:
+    get:
+      tags: [executions]
+      summary: Get execution logs
+      operationId: getExecutionLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: step_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+
+  /api/v1/approvals:
+    get:
+      tags: [approvals]
+      summary: List pending approvals
+      operationId: listApprovals
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Approval"
+
+  /api/v1/approvals/{approvalID}/approve:
+    post:
+      tags: [approvals]
+      summary: Approve a pending approval
+      operationId: approveApproval
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: approvalID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+      responses:
+        "200":
+          description: Approved
+
+  /api/v1/approvals/{approvalID}/reject:
+    post:
+      tags: [approvals]
+      summary: Reject a pending approval
+      operationId: rejectApproval
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: approvalID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Rejected
+
+  /api/v1/tenants:
+    get:
+      tags: [tenants]
+      summary: List user's tenants
+      operationId: listTenants
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tenant list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tenant"
+    post:
+      tags: [tenants]
+      summary: Create tenant
+      operationId: createTenant
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug:
+                  type: string
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+
+  /api/v1/secrets:
+    get:
+      tags: [secrets]
+      summary: List secrets (metadata only)
+      operationId: listSecrets
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Secret list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    name:
+                      type: string
+                    scope:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+    post:
+      tags: [secrets]
+      summary: Create or update a secret
+      operationId: createSecret
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, value]
+              properties:
+                name:
+                  type: string
+                value:
+                  type: string
+                scope:
+                  type: string
+                  enum: [tenant, workflow]
+                  default: tenant
+      responses:
+        "201":
+          description: Secret created
+
+  /api/v1/cron:
+    get:
+      tags: [cron]
+      summary: List cron schedules
+      operationId: listCronSchedules
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Cron schedule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CronSchedule"
+    post:
+      tags: [cron]
+      summary: Create cron schedule
+      operationId: createCronSchedule
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflow_id, expression]
+              properties:
+                workflow_id:
+                  type: string
+                  format: uuid
+                expression:
+                  type: string
+                  description: Cron expression (e.g., "0 9 * * *")
+                inputs:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Cron schedule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronSchedule"
+
+  /api/v1/audit:
+    get:
+      tags: [audit]
+      summary: List audit logs
+      operationId: listAuditLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: action
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit log list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLog"
+                  total:
+                    type: integer
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        active_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WorkflowVersion:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        schema_version:
+          type: string
+        source_format:
+          type: string
+          enum: [yaml, huml]
+        definition:
+          type: object
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Execution:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        workflow_version_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, queued, running, waiting_approval, paused, succeeded, failed, cancelled, retrying]
+        inputs:
+          type: object
+        outputs:
+          type: object
+          nullable: true
+        trigger_type:
+          type: string
+          enum: [manual, cron, api, webhook]
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Approval:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        execution_id:
+          type: string
+          format: uuid
+        step_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        required_roles:
+          type: array
+          items:
+            type: string
+        requested_at:
+          type: string
+          format: date-time
+        responded_at:
+          type: string
+          format: date-time
+          nullable: true
+        responded_by:
+          type: string
+          format: uuid
+          nullable: true
+        comment:
+          type: string
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CronSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+        expression:
+          type: string
+        inputs:
+          type: object
+        enabled:
+          type: boolean
+        next_run_at:
+          type: string
+          format: date-time
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        step_id:
+          type: string
+        stream:
+          type: string
+          enum: [stdout, stderr, system]
+        line:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+        resource:
+          type: string
+        details:
+          type: object
+        timestamp:
+          type: string
+          format: date-time

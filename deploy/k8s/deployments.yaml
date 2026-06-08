@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flowctl-server
+  namespace: flowctl
+  labels:
+    app: flowctl-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flowctl-server
+  template:
+    metadata:
+      labels:
+        app: flowctl-server
+    spec:
+      containers:
+        - name: server
+          image: flowctl/server:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: flowctl-config
+            - secretRef:
+                name: flowctl-secrets
+          env:
+            - name: SCHEDULER_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flowctl-worker
+  namespace: flowctl
+  labels:
+    app: flowctl-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flowctl-worker
+  template:
+    metadata:
+      labels:
+        app: flowctl-worker
+    spec:
+      containers:
+        - name: worker
+          image: flowctl/worker:latest
+          envFrom:
+            - configMapRef:
+                name: flowctl-config
+            - secretRef:
+                name: flowctl-secrets
+          env:
+            - name: SCHEDULER_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flowctl-frontend
+  namespace: flowctl
+  labels:
+    app: flowctl-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flowctl-frontend
+  template:
+    metadata:
+      labels:
+        app: flowctl-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: flowctl/frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"

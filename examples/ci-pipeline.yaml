@@ -1,0 +1,53 @@
+name: ci-pipeline
+version: "1.0"
+description: "Continuous integration pipeline"
+
+inputs:
+  - name: branch
+    type: string
+    required: true
+  - name: run_e2e
+    type: boolean
+    required: false
+    default: false
+
+steps:
+  - id: checkout
+    runner: local
+    command: "git checkout ${inputs.branch}"
+
+  - id: lint
+    runner: docker
+    image: golangci/golangci-lint:latest
+    command: "golangci-lint run ./..."
+    depends_on: [checkout]
+    timeout: "5m"
+
+  - id: unit-test
+    runner: docker
+    image: golang:1.22
+    command: "go test ./... -race -count=1"
+    depends_on: [checkout]
+    retry:
+      max_attempts: 2
+      backoff: fixed
+
+  - id: build
+    runner: docker
+    image: golang:1.22
+    command: "go build -o /app ./cmd/server"
+    depends_on: [lint, unit-test]
+
+  - id: e2e-test
+    runner: docker
+    image: cypress/included:latest
+    command: "cypress run"
+    depends_on: [build]
+    when: "${inputs.run_e2e == true}"
+    timeout: "15m"
+
+approvals:
+  - id: release-approval
+    depends_on: [build]
+    required_roles: [admin, release-manager]
+    message: "Approve release from branch ${inputs.branch}?"

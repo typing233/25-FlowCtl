@@ -1,0 +1,12 @@
+bin/
+dist/
+vendor/
+.env
+*.exe
+*.test
+*.out
+coverage.txt
+node_modules/
+web/dist/
+tmp/
+.DS_Store
